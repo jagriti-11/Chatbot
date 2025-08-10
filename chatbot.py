@@ -1,7 +1,10 @@
 import streamlit as st
 import google.generativeai as genai
 import os
+from dotenv import load_dotenv
 
+# Load .env file variables into environment
+load_dotenv()
 # Setting up the API key with env and saving key in terminal
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
