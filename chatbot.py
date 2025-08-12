@@ -6,6 +6,8 @@ from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain.tools import Tool
+from langchain.agents import initialize_agent,AgentType
 
 # Load environment variables
 load_dotenv()
@@ -43,16 +45,15 @@ llm = ChatGoogleGenerativeAI(
 
 # Input box
 user_input = st.text_input("Write your question here")
-
-if st.button("Ask") and user_input:
-    # Retrieve top-k chunks
+def rag_chatbot_tool(user_input):
+# Retrieve top-k chunks
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     relevant_docs = retriever.get_relevant_documents(user_input)
 
-    # Merge context
+# Merge context
     context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
 
-    # Create prompt
+# Create prompt
     prompt = f"""
     You are a helpful assistant. Use the following context to answer the question.
 
@@ -62,6 +63,11 @@ if st.button("Ask") and user_input:
     Question: {user_input}
     """
 
-    # Get answer from LLM
+# Get answer from LLM
     response = llm.invoke(prompt)
-    st.markdown(f"**Answer:** {response.content}")
+    return response.content
+rag_tool=Tool(name="RAG_TOOL",func=rag_chatbot_tool,description="Use this tool to answer questions based on the given text file")
+
+if st.button("Ask") and user_input:
+    answer=rag_tool.run(user_input)
+    st.markdown(f" **Answer:** {answer}")
