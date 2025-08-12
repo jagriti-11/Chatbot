@@ -1,108 +1,67 @@
-import os
-import asyncio
 import streamlit as st
+import os
 from dotenv import load_dotenv
-
-from langchain.prompts import PromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # Load environment variables
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-if not GOOGLE_API_KEY:
-    st.error("Please set your GEMINI_API_KEY in the .env file.")
-    st.stop()
+# Load text file
+file_path = "context.txt"
+loader = TextLoader(file_path)
+docs = loader.load()
 
-# Streamlit 
-st.set_page_config(page_title="My Chatbot", layout="wide")
+# Split into chunks
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=400,
+    chunk_overlap=80,
+    add_start_index=True
+)
+all_splits = text_splitter.split_documents(docs)
+
+# Create embeddings
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+# Store in vector DB
+vectorstore = FAISS.from_documents(all_splits, embeddings)
+
+# Streamlit UI
+st.set_page_config(page_title="My Chatbot")
 st.title("My Chatbot")
 
-# Session state for models and vector store
-if "llm" not in st.session_state:
-    st.session_state.llm = None
-if "emb_model" not in st.session_state:
-    st.session_state.emb_model = None
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-
-# Initialize models lazily (fix for event loop issue)
-def init_models():
-    # Ensure an event loop exists (needed for Google Generative AI Embeddings)
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    if st.session_state.llm is None:
-        st.session_state.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.2,
-            google_api_key=GOOGLE_API_KEY
-        )
-
-    if st.session_state.emb_model is None:
-        st.session_state.emb_model = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=GOOGLE_API_KEY
-        )
-
-# Load context.txt and build vector DB
-def load_context():
-    with open("context.txt", "r", encoding="utf-8") as f:
-        data = f.read()
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    docs = splitter.create_documents([data])
-
-    st.session_state.vector_store = FAISS.from_documents(
-        docs,
-        st.session_state.emb_model
-    )
-
-# Retrieval using cosine
-def retrieve_context(query, k=3):
-    results = st.session_state.vector_store.similarity_search(query, k=k)
-    return "\n".join([doc.page_content for doc in results])
-
-# Prompt template
-prompt_template = PromptTemplate(
-    input_variables=["context", "question"],
-    template="""
-You are a helpful assistant. Use the following context to answer the question accurately.
-If the answer is not in the context, say "I don't have enough information to answer that."
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-"""
+# LLM
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0.2,
+    google_api_key=GOOGLE_API_KEY
 )
 
-# Generate answer using LLM
-def generate_answer(query):
-    relevant_context = retrieve_context(query, k=3)
-    final_prompt = prompt_template.format(context=relevant_context, question=query)
-    response = st.session_state.llm.invoke(final_prompt)
-    return response.content
+# Input box
+user_input = st.text_input("Write your question here")
 
-# User input
-user_input = st.text_input("Write your Question:")
+if st.button("Ask") and user_input:
+    # Retrieve top-k chunks
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    relevant_docs = retriever.get_relevant_documents(user_input)
 
-if st.button("Ask"):
-    if user_input.strip():
-        init_models()
-        if st.session_state.vector_store is None:
-            load_context()
+    # Merge context
+    context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
 
-        answer = generate_answer(user_input)
-        st.markdown(f"**Answer:** {answer}")
-    else:
-        st.warning("Please enter a question first.")
+    # Create prompt
+    prompt = f"""
+    You are a helpful assistant. Use the following context to answer the question.
 
+    Context:
+    {context_text}
+
+    Question: {user_input}
+    """
+
+    # Get answer from LLM
+    response = llm.invoke(prompt)
+    st.markdown(f"**Answer:** {response.content}")
