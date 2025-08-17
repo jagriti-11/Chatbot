@@ -54,41 +54,88 @@ def calculator_tool(expression):
     except Exception:
         return "Invalid mathematical expression."
 
-# --- Tool 3: Weather Tool without API ---
+# --- Tool 3: Weather Tool ---
 weather_data = {
     "delhi": "Sunny, 35°C",
     "mumbai": "Rainy, 28°C",
     "kolkata": "Humid, 33°C",
-    "bangalore": "Cloudy, 25°C",
-    "Srinagar": "Chilly, 2°C"
+    "bangalore": "Cloudy, 25°C"
 }
 
 def weather_tool(state):
     state = state.lower()
     return weather_data.get(state, "Weather data not available for this state.")
 
-# Create toolkit
-tools = [
-    Tool(name="RAG_QA", func=rag_chatbot_tool, description="Answer questions based on the provided text file."),
-    Tool(name="Calculator", func=calculator_tool, description="Perform basic math calculations."),
-    Tool(name="Weather_Info", func=weather_tool, description="Get weather info for Indian states.")
+# --- Tool 4: Capital of Countries Tool---
+def capital_tool(country_name: str):
+    """Fetches the capital of a given country using LLM reasoning."""
+    prompt = f"What is the capital of {country_name}? Answer in one short sentence."
+    response = llm.invoke(prompt)
+    return response.content
+
+
+# Create toolkit for agent1
+tools_agent1 = [
+    Tool(name="RAG_QA", func=rag_chatbot_tool,
+         description="Answer questions based on the provided text file."),
+    Tool(name="Calculator", func=calculator_tool,
+         description="Perform basic math calculations.")
 ]
 
-# Create Agent
-agent = initialize_agent(
-    tools=tools,
+agent1 = initialize_agent(
+    tools=tools_agent1,
+    llm=llm,
+    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True,
+    handle_parsing_errors=True
+)
+# Create toolkit for agent2
+tools_agent2 = [
+    Tool(name="Weather_Info", func=weather_tool,
+         description="Get weather info for Indian states."),
+    Tool(name="Capital_Info", func=capital_tool,
+         description="Get the capital city of any country.")
+]
+
+agent2 = initialize_agent(
+    tools=tools_agent2,
     llm=llm,
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
     verbose=True,
     handle_parsing_errors=True
 )
 
-# Streamlit UI
-st.set_page_config(page_title="Chatbot with Agent")
-st.title("Chatbot with Agent")
+#Supervisor agent
+def supervisor_agent(query):
+    decision_prompt = f"""
+    You are a supervisor. Choose the best agent to handle the query.
 
-user_input = st.text_input("Ask something:")
+    Agent1: RAG_QA and Calculator
+    Agent2: Weather_Info and Capital_Info
+
+    Query: {query}
+
+    Reply with only 'Agent1' or 'Agent2'.
+    """
+
+    decision = llm.invoke(decision_prompt).content.strip()
+
+    if "Agent1" in decision:
+        return agent1.run(query)
+    elif "Agent2" in decision:
+        return agent2.run(query)
+    else:
+        return "Supervisor could not decide which agent to use."
+
+
+
+# Streamlit UI
+st.set_page_config(page_title="Multi-Agent Chatbot")
+st.title("Chatbot with Supervisor Agent")
+
+user_input = st.text_input("Write your question:")
 
 if st.button("Ask") and user_input:
-    answer = agent.run(user_input)
+    answer = supervisor_agent(user_input)
     st.markdown(f"**Answer:** {answer}")
+
