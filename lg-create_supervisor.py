@@ -1,24 +1,20 @@
 import streamlit as st
-import os
-from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.tools import Tool
-from langgraph.graph import StateGraph, MessagesState, END
-from langgraph.prebuilt import ToolNode
+from langchain_core.tools import Tool, tool
+from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
+import os
+from dotenv import load_dotenv
 
-# --------------------
-# Load environment variables
-# --------------------
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # --------------------
-# Load text file for RAG
+# Load Text File for RAG
 # --------------------
 file_path = "context.txt"
 loader = TextLoader(file_path)
@@ -27,13 +23,72 @@ docs = loader.load()
 # Split into chunks
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=400,
-    chunk_overlap=80
+    chunk_overlap=80,
+    add_start_index=True
 )
 all_splits = text_splitter.split_documents(docs)
 
-# Create embeddings and store in vector DB
+# --------------------
+# Embeddings + FAISS Vector Store
+# --------------------
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vectorstore = FAISS.from_documents(all_splits, embeddings)
+
+retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+
+# --------------------
+# Tools
+# --------------------
+def retrieve_info(query: str):
+    """Retrieve relevant context from local text file."""
+    docs = retriever.get_relevant_documents(query)
+    return "\n\n".join([doc.page_content for doc in docs])
+
+retrieval_tool = Tool(
+    name="RAG_QA",
+    func=retrieve_info,
+    description="Answer questions based on the provided text file."
+)
+
+# Calculator tool
+@tool
+def calculator(expression: str) -> str:
+    """Evaluate mathematical expressions safely."""
+    try:
+        result = eval(expression, {"__builtins__": {}})
+        return str(result)
+    except Exception:
+        return "Invalid mathematical expression."
+
+# Weather tool (static dictionary)
+weather_data = {
+    "delhi": "Sunny, 35°C",
+    "mumbai": "Rainy, 28°C",
+    "kolkata": "Humid, 33°C",
+    "bangalore": "Cloudy, 25°C",
+    "srinagar": "Chilly, 2°C"
+}
+
+@tool
+def get_weather(state: str) -> str:
+    """Fetch static weather info for Indian states."""
+    state = state.lower()
+    return weather_data.get(state, "Weather data not available for this state.")
+
+# Capital lookup tool
+capital_data = {
+    "india": "New Delhi",
+    "france": "Paris",
+    "germany": "Berlin",
+    "japan": "Tokyo",
+    "usa": "Washington, D.C."
+}
+
+@tool
+def get_capital(country: str) -> str:
+    """Lookup the capital of a given country."""
+    country = country.lower()
+    return capital_data.get(country, "Capital not available for this country.")
 
 # --------------------
 # LLM
@@ -45,143 +100,70 @@ llm = ChatGoogleGenerativeAI(
 )
 
 # --------------------
-# TOOL 1: RAG
+# Agents
 # --------------------
-def rag_chatbot_tool(query):
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    relevant_docs = retriever.get_relevant_documents(query)
-    context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
-    prompt = f"Answer based on the context:\n\n{context_text}\n\nQuestion: {query}"
-    response = llm.invoke(prompt)
-    return response.content
+rag_agent = create_react_agent(
+    model=llm,
+    tools=[retrieval_tool],
+    prompt="You are a RAG expert. Always use RAG_QA to answer from context.",
+    name="rag_agent"
+)
 
-rag_tool = Tool(
-    name="RAG_QA",
-    func=rag_chatbot_tool,
-    description="Answer questions based on the provided text file."
+calc_agent = create_react_agent(
+    model=llm,
+    tools=[calculator],
+    prompt="You are a math agent. Solve numerical problems.",
+    name="calc_agent"
+)
+
+weather_agent = create_react_agent(
+    model=llm,
+    tools=[get_weather],
+    prompt="You are a weather assistant. Provide weather details for Indian states.",
+    name="weather_agent"
+)
+
+capital_agent = create_react_agent(
+    model=llm,
+    tools=[get_capital],
+    prompt="You are a capital lookup agent. Provide country capitals.",
+    name="capital_agent"
 )
 
 # --------------------
-# TOOL 2: Calculator
+# Supervisor
 # --------------------
-def calculator_tool(expression):
-    """It calculates numerical mathematical expressions"""
-    try:
-        result = eval(expression, {"__builtins__": {}})
-        return f"The result is {result}"
-    except Exception:
-        return "Invalid mathematical expression."
-
-calc_tool = Tool(
-    name="Calculator",
-    func=calculator_tool,
-    description="Perform basic math calculations."
-)
-
-# --------------------
-# TOOL 3: Weather (Static Data)
-# --------------------
-weather_data = {
-    "delhi": "Sunny, 35°C",
-    "mumbai": "Rainy, 28°C",
-    "kolkata": "Humid, 33°C",
-    "bangalore": "Cloudy, 25°C",
-    "srinagar": "Chilly, 2°C"
-}
-
-def weather_tool(state):
-    state = state.lower()
-    return weather_data.get(state, "Weather data not available for this state.")
-
-weather = Tool(
-    name="Weather_Info",
-    func=weather_tool,
-    description="Get weather info for Indian states."
-)
-
-# --------------------
-# TOOL 4: Capital Lookup
-# --------------------
-capital_data = {
-    "india": "New Delhi",
-    "france": "Paris",
-    "germany": "Berlin",
-    "japan": "Tokyo",
-    "usa": "Washington, D.C."
-}
-
-def capital_tool(country):
-    country = country.lower()
-    return capital_data.get(country, "Capital not available for this country.")
-
-capital = Tool(
-    name="Capital_Info",
-    func=capital_tool,
-    description="Get the capital of a country."
-)
-
-# --------------------
-# Wrap Tools into ToolNodes
-# --------------------
-rag_node = ToolNode([rag_tool])
-calc_node = ToolNode([calc_tool])
-weather_node = ToolNode([weather])
-capital_node = ToolNode([capital])
-
-# --------------------
-# Supervisor (automatic router using LLM)
-# --------------------
-supervisor = create_supervisor(
-    mode=llm,
-    agents=[rag_tool, calc_tool, weather, capital],  # ✅ FIXED
-    system_prompt=(
-        "You are a supervisor. Route the user’s query "
-        "to the most appropriate tool:\n"
-        "- Use RAG_QA for context-based Q&A\n"
-        "- Use Calculator for math\n"
-        "- Use Weather_Info for weather queries\n"
-        "- Use Capital_Info for country capital lookups"
+workflow = create_supervisor(
+    model=llm,
+    agents=[rag_agent, calc_agent, weather_agent, capital_agent],
+    prompt=(
+        "You are a supervisor managing four agents:\n"
+        "- RAG agent: for context-based Q&A\n"
+        "- Calculator agent: for math\n"
+        "- Weather agent: for weather info\n"
+        "- Capital agent: for country capitals\n"
+        "Route queries ONLY to the correct agent. Never answer directly."
     )
 )
 
-# --------------------
-# Build Graph
-# --------------------
-graph = StateGraph(MessagesState)
-
-graph.add_node("rag_agent", rag_node)
-graph.add_node("calc_agent", calc_node)
-graph.add_node("weather_agent", weather_node)
-graph.add_node("capital_agent", capital_node)
-graph.add_node("supervisor", supervisor)
-
-graph.set_entry_point("supervisor")
-
-# Edges from supervisor to tools
-graph.add_edge("supervisor", "rag_agent")
-graph.add_edge("supervisor", "calc_agent")
-graph.add_edge("supervisor", "weather_agent")
-graph.add_edge("supervisor", "capital_agent")
-
-# Each tool ends
-graph.add_edge("rag_agent", END)
-graph.add_edge("calc_agent", END)
-graph.add_edge("weather_agent", END)
-graph.add_edge("capital_agent", END)
+supervisor = workflow.compile(name="supervisor")
 
 # --------------------
-# Compile Graph
+# Streamlit UI
 # --------------------
-app_graph = graph.compile()
+st.set_page_config(page_title="Multi-Agent Chatbot")
+st.title("🤖 Multi-Agent Supervisor Chatbot")
 
-# --------------------
-# Streamlit UI (simplified)
-# --------------------
-st.title("LangGraph Multi-Agent Implementation")
+user_input = st.text_input("Ask your question:")
 
-query = st.text_input("Write your question:")
+if st.button("Send") and user_input:
+    with st.spinner("Thinking..."):
+        final_state = supervisor.invoke({"messages": [{"role": "user", "content": user_input}]})
 
-if query:
-    final_state = app_graph.invoke({"query": query, "answer": "", "next": ""})
-    st.write("Answer:")
-    st.success(final_state["answer"])
+    messages = final_state.get("messages", [])
+    if messages:
+        bot_reply = messages[-1].content
+    else:
+        bot_reply = "Sorry, I didn’t get a reply."
+
+    st.markdown(f"**Answer:** {bot_reply}")
