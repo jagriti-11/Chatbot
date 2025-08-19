@@ -13,9 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# --------------------
-# Load Text File for RAG
-# --------------------
+
 file_path = "context.txt"
 loader = TextLoader(file_path)
 docs = loader.load()
@@ -28,17 +26,12 @@ text_splitter = RecursiveCharacterTextSplitter(
 )
 all_splits = text_splitter.split_documents(docs)
 
-# --------------------
-# Embeddings + FAISS Vector Store
-# --------------------
+
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vectorstore = FAISS.from_documents(all_splits, embeddings)
 
 retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-# --------------------
-# Tools
-# --------------------
 def retrieve_info(query: str):
     """Retrieve relevant context from local text file."""
     docs = retriever.get_relevant_documents(query)
@@ -60,7 +53,7 @@ def calculator(expression: str) -> str:
     except Exception:
         return "Invalid mathematical expression."
 
-# Weather tool (static dictionary)
+# Weather tool 
 weather_data = {
     "delhi": "Sunny, 35°C",
     "mumbai": "Rainy, 28°C",
@@ -90,18 +83,14 @@ def get_capital(country: str) -> str:
     country = country.lower()
     return capital_data.get(country, "Capital not available for this country.")
 
-# --------------------
-# LLM
-# --------------------
+
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0.2,
     google_api_key=GOOGLE_API_KEY
 )
 
-# --------------------
-# Agents
-# --------------------
+
 rag_agent = create_react_agent(
     model=llm,
     tools=[retrieval_tool],
@@ -130,9 +119,7 @@ capital_agent = create_react_agent(
     name="capital_agent"
 )
 
-# --------------------
-# Supervisor
-# --------------------
+
 workflow = create_supervisor(
     model=llm,
     agents=[rag_agent, calc_agent, weather_agent, capital_agent],
@@ -148,11 +135,8 @@ workflow = create_supervisor(
 
 supervisor = workflow.compile(name="supervisor")
 
-# --------------------
-# Streamlit UI
-# --------------------
-st.set_page_config(page_title="Multi-Agent Chatbot")
-st.title("🤖 Multi-Agent Supervisor Chatbot")
+st.set_page_config(page_title="Supervisor Chatbot")
+st.title("Supervisor Chatbot")
 
 user_input = st.text_input("Ask your question:")
 
