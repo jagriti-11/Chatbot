@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 import os
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY")) 
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY")) 
 
 def agent1_interpreter(user_story: str) -> str:
     model = genai.GenerativeModel("gemini-1.5-flash")
